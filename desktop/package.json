@@ -1,0 +1,13 @@
+{
+  "name": "sinal",
+  "version": "1.0.0",
+  "description": "SINAL — transmita sua tela",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^44.4.5"
+  }
+}

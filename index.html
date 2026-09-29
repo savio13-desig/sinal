@@ -47,6 +47,15 @@ select{background:var(--panel);border:1px solid var(--line);padding:8px 10px;wid
 .mini{border:1px solid var(--line);background:none;padding:9px;cursor:pointer;text-transform:uppercase;letter-spacing:.1em;font-size:11px}
 .mini:hover{background:var(--ink);color:var(--bg)}
 .hint{color:var(--dim);font-size:11px}
+.picker{position:fixed;inset:0;background:#000d;display:none;place-items:center;z-index:10}
+.picker.open{display:grid}
+.picker .box{background:var(--bg);border:1px solid var(--line);width:min(960px,94vw);max-height:88vh;overflow:auto;padding:22px}
+.picker h3{font-family:var(--serif);font-weight:400;font-size:34px;margin-bottom:14px}
+.picker .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px}
+.picker .it{border:1px solid var(--line);background:var(--panel);padding:8px;cursor:pointer;text-align:left}
+.picker .it:hover{border-color:var(--ink)}
+.picker .it img{width:100%;aspect-ratio:16/9;object-fit:cover;background:#000;display:block}
+.picker .it span{display:block;margin-top:6px;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .viewers{list-style:none;padding:0;display:grid;gap:4px;max-height:140px;overflow:auto}
 .viewers li{display:flex;justify-content:space-between;color:var(--dim)}
 .viewers li b{color:var(--ok);font-weight:400}
@@ -158,6 +167,8 @@ body.viewer .rail{display:none}
     <button id="fs">Tela cheia</button>
   </div>
 </main>
+
+<div class="picker" id="picker"><div class="box"><h3>O que transmitir?</h3><div class="grid" id="pgrid"></div><button class="mini" id="pcancel" style="margin-top:14px">Cancelar</button></div></div>
 
 <script>
 (() => {
@@ -281,9 +292,10 @@ body.viewer .rail{display:none}
     set: (k, v) => { try { localStorage.setItem(k, v); } catch {} }
   };
   roomIn.value = clean(store.get('sinal-room')) || rand();
-  const updateLink = () => { linkIn.value = location.origin === 'null' || location.protocol === 'file:'
-    ? location.href.split('#')[0] + '#' + roomIn.value
-    : location.origin + location.pathname + '#' + roomIn.value; };
+  const PUBLIC_URL = 'https://savio13-desig.github.io/sinal/';
+  const updateLink = () => {
+    linkIn.value = (location.protocol === 'file:' ? PUBLIC_URL : location.origin + location.pathname) + '#' + roomIn.value;
+  };
 
   const renderViewers = () => {
     $('count').textContent = viewers.size;
@@ -361,8 +373,22 @@ body.viewer .rail{display:none}
     setState(false, 'Fora do ar');
   };
 
+  const pickSource = () => new Promise(async res => {
+    const grid = $('pgrid'); grid.innerHTML = '';
+    $('picker').classList.add('open');
+    const done = id => { $('picker').classList.remove('open'); res(id); };
+    $('pcancel').onclick = () => done(null);
+    (await window.sinalNative.sources()).forEach(src => {
+      const b = document.createElement('button'); b.className = 'it';
+      b.innerHTML = '<img alt=""><span></span>'; b.querySelector('img').src = src.thumb; b.querySelector('span').textContent = src.name;
+      b.onclick = async () => { await window.sinalNative.pick(src.id); done(src.id); };
+      grid.appendChild(b);
+    });
+  });
+
   const start = async () => {
     msg.textContent = '';
+    if (window.sinalNative && $('source').value === 'screen' && !(await pickSource())) return;
     const [h, fps, kbps] = $('quality').value.split(',').map(Number);
     let screen, mic = null;
     try {
