@@ -396,15 +396,17 @@ body.viewer .rail{display:none}
   // estatística de envio, por amigo
   setInterval(async () => {
     if (!stream) return;
-    let total = 0, w = 0, h = 0;
+    let total = 0, w = 0, h = 0, cap = 0, impl = '', pli = 0, nack = 0;
     for (const v of viewers.values()) {
       if (!v.call || !v.call.peerConnection) continue;
       const info = { fps: 0, kbps: 0, why: 'none', rtt: 0 };
       try { (await v.call.peerConnection.getStats()).forEach(r => {
         if (r.type === 'outbound-rtp' && r.kind === 'video') {
-          info.why = r.qualityLimitationReason || 'none'; w = r.frameWidth || w; h = r.frameHeight || h; info.fps = r.framesPerSecond || 0;
+          info.why = r.qualityLimitationReason || 'none'; w = r.frameWidth || w; h = r.frameHeight || h; info.fps = r.framesPerSecond || 0; impl = r.encoderImplementation || impl; pli += r.pliCount || 0; nack += r.nackCount || 0;
           if (v.last && v.last.t) info.kbps = (r.bytesSent - v.last.b) * 8 / (r.timestamp - v.last.t);
           v.last = { b: r.bytesSent, t: r.timestamp };
+        } else if (r.type === 'media-source' && r.kind === 'video') {
+          cap = Math.max(cap, r.framesPerSecond || 0);
         } else if (r.type === 'candidate-pair' && r.state === 'succeeded' && r.nominated) {
           info.rtt = Math.round((r.currentRoundTripTime || 0) * 1000);
         }
@@ -413,7 +415,7 @@ body.viewer .rail{display:none}
     }
     renderViewers();
     $('stats').hidden = false;
-    $('stats').textContent = (w ? w + '×' + h + ' · ' : '') + '↑ ' + (total / 1000).toFixed(1) + ' Mbps total';
+    $('stats').textContent = (w ? w + '×' + h + ' · ' : '') + '↑ ' + (total / 1000).toFixed(1) + ' Mbps · captura ' + Math.round(cap) + ' fps · ' + (impl || '?') + ' · PLI ' + pli + ' NACK ' + nack;
   }, 1000);
 
   window.addEventListener('beforeunload', () => peer && peer.destroy());
