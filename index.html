@@ -110,10 +110,10 @@ body.viewer .rail{display:none}
         <option value="VP8">Codec VP8 · compatibilidade</option>
       </select>
       <select id="quality" aria-label="Qualidade">
-        <option value="720,30,3000">720p · 30 fps · leve</option>
-        <option value="1080,30,6000" selected>1080p · 30 fps · padrão</option>
-        <option value="1080,60,10000">1080p · 60 fps · jogos</option>
-        <option value="1440,60,16000">1440p · 60 fps · pesado</option>
+        <option value="540,30,1800">540p · 30 fps · rede fraca</option>
+        <option value="720,30,3000" selected>720p · 30 fps · recomendado</option>
+        <option value="1080,30,5000">1080p · 30 fps · nítido</option>
+        <option value="1080,60,8000">1080p · 60 fps · precisa de muita banda</option>
       </select>
     </div>
   </div>
@@ -283,7 +283,7 @@ body.viewer .rail{display:none}
     });
   };
 
-  const tune = (call, kbps, fps) => {
+  const tune = (call, kbps, fps, targetW) => {
     const apply = () => {
       call.peerConnection && call.peerConnection.getSenders().forEach(s => {
         if (!s.track) return;
@@ -292,7 +292,9 @@ body.viewer .rail{display:none}
           const p = s.getParameters(); p.encodings = p.encodings && p.encodings.length ? p.encodings : [{}];
           p.encodings[0].maxBitrate = kbps * 1000;
           p.encodings[0].maxFramerate = fps;
-          p.degradationPreference = fps >= 60 ? 'maintain-framerate' : 'balanced';
+          const w = s.track.getSettings().width || 1920;
+          p.encodings[0].scaleResolutionDownBy = Math.max(1, w / targetW);
+          p.degradationPreference = 'maintain-framerate';
           s.setParameters(p).catch(()=>{});
         }
       });
@@ -302,10 +304,10 @@ body.viewer .rail{display:none}
 
   const callViewer = id => {
     if (!stream) return;
-    const [, fps, kbps] = $('quality').value.split(',').map(Number);
+    const [h, fps, kbps] = $('quality').value.split(',').map(Number);
     const call = peer.call(id, stream, { sdpTransform: sdp => sdpTune(sdp, $('codec').value, kbps) });
     const v = viewers.get(id); if (v) v.call = call;
-    tune(call, kbps, fps);
+    tune(call, kbps, fps, Math.round(h * 16 / 9));
   };
 
   const startPeer = () => {
@@ -370,6 +372,7 @@ body.viewer .rail{display:none}
       dest.stream.getAudioTracks().forEach(t => out.addTrack(t));
     } else [...sysA, ...micA].forEach(t => out.addTrack(t));
 
+    screen.getVideoTracks().forEach(t => { t.contentHint = 'motion'; });
     stream = out;
     screen.getVideoTracks()[0].addEventListener('ended', stop);
     $('vid').srcObject = new MediaStream(out.getVideoTracks()); // prévia sem eco de áudio
