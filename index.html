@@ -43,6 +43,10 @@ select{background:var(--panel);border:1px solid var(--line);padding:8px 10px;wid
 .go.stop{background:var(--live);color:#fff}
 .go.stop:hover{background:#fff;color:var(--bg)}
 .go:disabled{opacity:.4;cursor:not-allowed}
+.camBox{display:grid;gap:10px}.camBox[hidden]{display:none}
+.mini{border:1px solid var(--line);background:none;padding:9px;cursor:pointer;text-transform:uppercase;letter-spacing:.1em;font-size:11px}
+.mini:hover{background:var(--ink);color:var(--bg)}
+.hint{color:var(--dim);font-size:11px}
 .viewers{list-style:none;padding:0;display:grid;gap:4px;max-height:140px;overflow:auto}
 .viewers li{display:flex;justify-content:space-between;color:var(--dim)}
 .viewers li b{color:var(--ok);font-weight:400}
@@ -101,7 +105,17 @@ body.viewer .rail{display:none}
   <div class="sec">
     <div class="lbl"><span>Transmissão</span></div>
     <div class="opts">
-      <label class="opt"><span>Áudio do sistema</span><input type="checkbox" id="optSys" checked></label>
+      <select id="source" aria-label="Fonte">
+        <option value="screen" selected>Fonte: tela / janela</option>
+        <option value="cam">Fonte: câmera · OBS Virtual Camera</option>
+      </select>
+      <div class="camBox" id="camBox" hidden>
+        <select id="camDev" aria-label="Câmera"></select>
+        <select id="audDev" aria-label="Entrada de áudio"></select>
+        <button class="mini" id="scan" type="button">Detectar dispositivos</button>
+        <div class="hint">No OBS: Iniciar Câmera Virtual. Para o som do jogo escolha “Mixagem estéreo” (ou um cabo virtual) em áudio.</div>
+      </div>
+      <label class="opt" id="sysRow"><span>Áudio do sistema</span><input type="checkbox" id="optSys" checked></label>
       <label class="opt"><span>Meu microfone</span><input type="checkbox" id="optMic"></label>
       <select id="codec" aria-label="Codec">
         <option value="H264" selected>Codec H.264 · placa de vídeo</option>
@@ -352,10 +366,16 @@ body.viewer .rail{display:none}
     const [h, fps, kbps] = $('quality').value.split(',').map(Number);
     let screen, mic = null;
     try {
-      screen = await navigator.mediaDevices.getDisplayMedia({
-        video: { height: { ideal: h }, width: { ideal: Math.round(h*16/9) }, frameRate: { ideal: fps, max: fps } },
-        audio: $('optSys').checked ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false } : false
-      });
+      const cam = $('source').value === 'cam';
+      screen = cam
+        ? await navigator.mediaDevices.getUserMedia({
+            video: { deviceId: $('camDev').value ? { exact: $('camDev').value } : undefined, width: { ideal: Math.round(h*16/9) }, height: { ideal: h }, frameRate: { ideal: fps } },
+            audio: $('audDev').value ? { deviceId: { exact: $('audDev').value }, echoCancellation: false, noiseSuppression: false, autoGainControl: false } : false
+          })
+        : await navigator.mediaDevices.getDisplayMedia({
+            video: { height: { ideal: h }, width: { ideal: Math.round(h*16/9) }, frameRate: { ideal: fps, max: fps } },
+            audio: $('optSys').checked ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false } : false
+          });
       if ($('optMic').checked) mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
     } catch (e) {
       if (screen) screen.getTracks().forEach(t => t.stop());
@@ -379,9 +399,33 @@ body.viewer .rail{display:none}
     $('stage').classList.add('on');
     goBtn.textContent = 'Parar transmissão'; goBtn.classList.add('stop');
     setState(true, 'No ar');
-    if (!sysA.length && $('optSys').checked) msg.textContent = 'Sem áudio do sistema: marque “Compartilhar áudio” na janela do navegador (aba/tela inteira no Chrome).';
+    if (!sysA.length && $('source').value === 'screen' && $('optSys').checked) msg.textContent = 'Sem áudio do sistema: marque “Compartilhar áudio” na janela do navegador (aba/tela inteira no Chrome).';
     viewers.forEach((_, id) => callViewer(id));
   };
+
+  const listDevices = async () => {
+    const devs = await navigator.mediaDevices.enumerateDevices();
+    const fill = (el, kind, none) => {
+      const cur = el.value; el.innerHTML = none ? '<option value="">' + none + '</option>' : '';
+      devs.filter(d => d.kind === kind).forEach((d, i) => {
+        const o = document.createElement('option'); o.value = d.deviceId; o.textContent = d.label || (kind === 'videoinput' ? 'Câmera ' : 'Áudio ') + (i + 1); el.appendChild(o);
+      });
+      if ([...el.options].some(o => o.value === cur)) el.value = cur;
+      else if (kind === 'videoinput') { const obs = [...el.options].find(o => /obs/i.test(o.textContent)); if (obs) el.value = obs.value; }
+    };
+    fill($('camDev'), 'videoinput'); fill($('audDev'), 'audioinput', 'Sem áudio');
+  };
+  $('scan').onclick = async () => {
+    try { (await navigator.mediaDevices.getUserMedia({ video: true, audio: true })).getTracks().forEach(t => t.stop()); }
+    catch { try { (await navigator.mediaDevices.getUserMedia({ video: true })).getTracks().forEach(t => t.stop()); } catch {} }
+    listDevices();
+  };
+  $('source').onchange = () => {
+    const cam = $('source').value === 'cam';
+    $('camBox').hidden = !cam; $('sysRow').style.display = cam ? 'none' : '';
+    if (cam) listDevices();
+  };
+  navigator.mediaDevices && navigator.mediaDevices.addEventListener('devicechange', () => { if ($('source').value === 'cam') listDevices(); });
 
   goBtn.onclick = () => (stream ? stop() : start());
   $('newRoom').onclick = () => { if (stream) stop(); roomIn.value = rand(); startPeer(); };
