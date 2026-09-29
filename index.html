@@ -103,6 +103,12 @@ body.viewer .rail{display:none}
     <div class="opts">
       <label class="opt"><span>Áudio do sistema</span><input type="checkbox" id="optSys" checked></label>
       <label class="opt"><span>Meu microfone</span><input type="checkbox" id="optMic"></label>
+      <select id="codec" aria-label="Codec">
+        <option value="H264" selected>Codec H.264 · placa de vídeo</option>
+        <option value="VP9">Codec VP9 · mais nítido, mais CPU</option>
+        <option value="AV1">Codec AV1 · placas novas</option>
+        <option value="VP8">Codec VP8 · compatibilidade</option>
+      </select>
       <select id="quality" aria-label="Qualidade">
         <option value="720,30,3000">720p · 30 fps · leve</option>
         <option value="1080,30,6000" selected>1080p · 30 fps · padrão</option>
@@ -160,6 +166,33 @@ body.viewer .rail{display:none}
     $('stateTxt').textContent = txt;
   };
 
+  /* Reordena codecs e sobe o bitrate inicial (evita começar em ~300 kbps e travar) */
+  const sdpTune = (sdp, codec, kbps) => {
+    const L = sdp.split('\r\n');
+    const mi = L.findIndex(l => l.startsWith('m=video'));
+    if (mi < 0) return sdp;
+    let end = L.findIndex((l, i) => i > mi && l.startsWith('m='));
+    if (end < 0) end = L.length;
+    const sect = L.slice(mi, end), head = sect[0].split(' ');
+    const pts = head.slice(3), name = {}, apt = {};
+    sect.forEach(l => {
+      let m = l.match(/^a=rtpmap:(\d+) ([\w-]+)\//); if (m) name[m[1]] = m[2].toUpperCase();
+      m = l.match(/^a=fmtp:(\d+) .*apt=(\d+)/); if (m) apt[m[1]] = m[2];
+    });
+    let first = codec ? pts.filter(p => name[p] === codec) : [];
+    const rtx = pts.filter(p => apt[p] && first.includes(apt[p]));
+    const order = first.length ? [...first, ...rtx, ...pts.filter(p => !first.includes(p) && !rtx.includes(p))] : pts;
+    const bw = ';x-google-min-bitrate=' + Math.round(kbps*.3) + ';x-google-start-bitrate=' + Math.round(kbps*.8) + ';x-google-max-bitrate=' + kbps;
+    const out = [head.slice(0,3).concat(order).join(' ')];
+    sect.slice(1).forEach(l => {
+      const m = l.match(/^a=(rtpmap|fmtp):(\d+) /);
+      if (m && m[1] === 'fmtp' && name[m[2]] && !['RTX','RED','ULPFEC','FLEXFEC-03'].includes(name[m[2]])) l += bw;
+      out.push(l);
+      if (m && m[1] === 'rtpmap' && !['RTX','RED','ULPFEC','FLEXFEC-03'].includes(name[m[2]]) && !sect.some(x => x.startsWith('a=fmtp:' + m[2] + ' '))) out.push('a=fmtp:' + m[2] + ' ' + bw.slice(1));
+    });
+    return L.slice(0, mi).concat(out, L.slice(end)).join('\r\n');
+  };
+
   /* ======================= VIEWER ======================= */
   if (isViewer) {
     document.body.classList.add('viewer');
@@ -212,7 +245,7 @@ body.viewer .rail{display:none}
     });
     peer.on('disconnected', () => peer.reconnect());
     peer.on('call', call => {
-      call.answer();
+      call.answer(undefined, { sdpTransform: sdp => sdpTune(sdp, null, 30000) });
       call.on('stream', s => { showStream(s); watchStats(call); });
       call.on('close', waiting);
     });
@@ -254,11 +287,11 @@ body.viewer .rail{display:none}
       call.peerConnection && call.peerConnection.getSenders().forEach(s => {
         if (!s.track) return;
         if (s.track.kind === 'video') {
-          s.track.contentHint = fps >= 60 ? 'motion' : 'detail';
+          s.track.contentHint = 'motion';
           const p = s.getParameters(); p.encodings = p.encodings && p.encodings.length ? p.encodings : [{}];
           p.encodings[0].maxBitrate = kbps * 1000;
           p.encodings[0].maxFramerate = fps;
-          p.degradationPreference = 'maintain-resolution';
+          p.degradationPreference = fps >= 60 ? 'maintain-framerate' : 'balanced';
           s.setParameters(p).catch(()=>{});
         }
       });
@@ -269,7 +302,7 @@ body.viewer .rail{display:none}
   const callViewer = id => {
     if (!stream) return;
     const [, fps, kbps] = $('quality').value.split(',').map(Number);
-    const call = peer.call(id, stream);
+    const call = peer.call(id, stream, { sdpTransform: sdp => sdpTune(sdp, $('codec').value, kbps) });
     const v = viewers.get(id); if (v) v.call = call;
     tune(call, kbps, fps);
   };
@@ -359,11 +392,11 @@ body.viewer .rail{display:none}
   // estatística de envio (bitrate saindo)
   setInterval(async () => {
     if (!stream) return;
-    let total = 0, w = 0, h = 0, f = 0;
+    let total = 0, w = 0, h = 0, f = 0, why = 'none';
     for (const v of viewers.values()) {
       if (!v.call || !v.call.peerConnection) continue;
       try { (await v.call.peerConnection.getStats()).forEach(r => {
-        if (r.type === 'outbound-rtp' && r.kind === 'video') { w = r.frameWidth||w; h = r.frameHeight||h; f = r.framesPerSecond||f;
+        if (r.type === 'outbound-rtp' && r.kind === 'video') { why = r.qualityLimitationReason && r.qualityLimitationReason !== 'none' ? r.qualityLimitationReason : why; w = r.frameWidth||w; h = r.frameHeight||h; f = r.framesPerSecond||f;
           v.last = v.last || { b: 0, t: 0 };
           if (v.last.t) total += (r.bytesSent - v.last.b)*8/(r.timestamp - v.last.t);
           v.last = { b: r.bytesSent, t: r.timestamp };
@@ -371,7 +404,7 @@ body.viewer .rail{display:none}
       }); } catch {}
     }
     $('stats').hidden = false;
-    $('stats').textContent = (w?w+'×'+h+' · ':'') + Math.round(f) + ' fps · ↑ ' + (total/1000).toFixed(1) + ' Mbps';
+    $('stats').textContent = (w?w+'×'+h+' · ':'') + Math.round(f) + ' fps · ↑ ' + (total/1000).toFixed(1) + ' Mbps' + (why === 'cpu' ? ' · limitado pela CPU' : why === 'bandwidth' ? ' · limitado pela internet' : '');
   }, 1000);
 
   window.addEventListener('beforeunload', () => peer && peer.destroy());
