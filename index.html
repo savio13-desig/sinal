@@ -346,6 +346,7 @@ body.viewer .rail{display:none}
     peer.on('open', () => { $('peerState').textContent = 'pronta'; msg.textContent = ''; });
     peer.on('disconnected', () => peer.reconnect());
     peer.on('error', e => {
+      if (e.type === 'peer-unavailable') return;
       $('peerState').textContent = 'erro';
       msg.textContent = e.type === 'unavailable-id'
         ? 'Esse nome de sala já está em uso. Gere outro (↻).'
@@ -482,6 +483,9 @@ body.viewer .rail{display:none}
         }
       }); } catch {}
       total += info.kbps; v.info = info;
+      // conexão que nunca começou (0 fps por ~8 s): descarta e chama de novo
+      v.zero = info.fps === 0 && info.kbps === 0 ? (v.zero || 0) + 1 : 0;
+      if (v.zero >= 8) { v.zero = 0; try { v.call.close(); } catch {} v.last = null; callViewer(v.conn.peer); }
     }
     renderViewers();
     $('stats').hidden = false;
